@@ -1,3 +1,4 @@
+sudachipy==0.6.7
 # Core dependencies
 # If using conda, install these first for best compatibility:
 # conda install -c conda-forge numpy pydantic torch ffmpeg
