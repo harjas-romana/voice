@@ -23,6 +23,7 @@ This project implements a high-performance, low-latency text-to-speech (TTS) sys
 - **Direct API**: Use `voice.speak()` for traditional TTS or `voice.speak_streaming()` for streaming.
 - **HTTP Endpoints**: RESTful API endpoints for TTS and conversation.
 - **WebSocket Endpoints**: Real-time streaming via WebSockets.
+- **Phone Calling**: Integrate with Twilio to handle real telephone calls.
 
 ## Usage
 
@@ -56,72 +57,17 @@ Open `websocket_client_demo.html` in a web browser to test the WebSocket functio
 - `POST /query-stream`: Stream text responses as they are generated
 - `POST /tts`: Convert text to speech and return audio URL
 - `POST /tts-stream`: Stream audio directly
-- `POST /voice-query`: Process voice queries and return text and audio
 
 ### WebSocket Endpoints
 
-- `ws://localhost:8006/ws/tts`: WebSocket for streaming TTS
-- `ws://localhost:8006/ws/conversation`: WebSocket for real-time conversation with both text and audio responses
-
-## Implementation Details
-
-### TTS Streaming Architecture
-
-1. **Text Processing**:
-   - Split input text into sentences
-   - Process sentences in parallel using thread pool
-
-2. **Audio Generation**:
-   - Generate audio for each sentence
-   - Yield audio chunks as they become available
-   - Small delays between chunks for realistic streaming
-
-3. **WebSocket Communication**:
-   - Send status updates as JSON messages
-   - Send binary audio data as it's generated
-   - Client can play audio incrementally
-
-### Latency Comparison
-
-| Method | Average Latency | Notes |
-|--------|----------------|-------|
-| Traditional TTS | 3-5 seconds | Full processing before playback |
-| Streaming TTS | 0.5-1 second | First audio chunk available quickly |
-| WebSocket Streaming | 0.3-0.8 seconds | Real-time bidirectional communication |
-
-## Future Improvements
-
-- Implement adaptive chunk sizing based on network conditions
-- Add voice activity detection for more natural pauses
-- Optimize audio format for web streaming (consider MP3 or Opus)
-- Implement progressive enhancement for slower connections
-
-# QuantAI Restaurant Backend
-
-This is the backend server for the QuantAI Restaurant system. It provides a FastAPI-based API for processing text and voice queries, as well as WebSocket endpoints for real-time communication.
-
-## Features
-
-- Text query processing via the QuantAI Restaurant Agent
-- Text-to-Speech synthesis using Coqui XTTS-v2 with ElevenLabs fallback
-- WebSocket endpoints for real-time conversation
-- Voice query processing with Google Speech Recognition
-- Phone call integration with Fonoster for real-time voice calling
-
-## Installation
-
-1. Clone the repository
-2. Install the required packages:
-```
-pip install -r requirements.txt
-```
-3. Configure the environment variables (see below)
+- `/ws/tts`: WebSocket endpoint for streaming TTS
+- `/ws/conversation`: WebSocket endpoint for two-way conversation
 
 ## Environment Variables
 
 Copy the example environment file and fill in your own values:
 ```
-cp fonoster_config.env.example .env
+cp twilio_env.example .env
 ```
 
 Required environment variables:
@@ -132,40 +78,40 @@ Optional environment variables:
 - `ELEVENLABS_API_KEY`: API key for ElevenLabs (TTS fallback)
 - `DEFAULT_SPEAKER_WAV`: Path to a WAV file for voice cloning
 
-## Phone Calling with Fonoster
+## Phone Calling with Twilio
 
-The system now supports real-time phone calling integration using Fonoster, an open-source alternative to Twilio. This allows customers to call a phone number and interact with the QuantAI Restaurant agent over voice.
+The system now supports real-time phone calling integration using Twilio. This allows customers to call a phone number and interact with the QuantAI Restaurant agent over voice.
 
-### Setting up Fonoster
+### Setting up Twilio
 
-1. Create a Fonoster account at https://fonoster.com/
-2. Install Fonoster CLI: `npm install -g @fonoster/ctl`
-3. Log in to Fonoster: `fonoster login`
-4. Get your API credentials from the Fonoster dashboard
-5. Add the following to your `.env` file:
+1. Create a Twilio account at https://www.twilio.com/
+2. Buy a phone number from the Twilio console
+3. Get your Twilio credentials (Account SID and Auth Token)
+4. Add the following to your `.env` file:
 ```
-FONOSTER_API_KEY=your-fonoster-api-key-here
-FONOSTER_API_SECRET=your-fonoster-api-secret-here
-FONOSTER_ACCESS_KEY_ID=your-fonoster-access-key-id-here
-FONOSTER_FROM_NUMBER=your-phone-number
+TWILIO_ACCOUNT_SID=your-twilio-account-sid
+TWILIO_AUTH_TOKEN=your-twilio-auth-token
+TWILIO_PHONE_NUMBER=your-twilio-phone-number
+TWILIO_WEBHOOK_BASE_URL=https://your-server-url.com
 ```
 
 ### Starting the Voice Server
 
-1. Run the setup script to configure your Fonoster resources:
-```
-python fonoster_config.py
-```
-
-2. Start the server as usual:
+1. Start the server as usual:
 ```
 python server.py
 ```
+The Twilio webhook server will start automatically alongside the FastAPI server.
 
-3. Use the API endpoints to manage the voice server:
-- `/fonoster/start-voice-server`: Start the voice server
-- `/fonoster/stop-voice-server`: Stop the voice server
-- `/fonoster/status`: Check the status of the voice server
+2. Set up your Twilio webhooks by visiting:
+```
+http://your-server-url.com:8006/twilio/setup
+```
+
+3. Use the API endpoint to check Twilio status:
+```
+GET /twilio/status
+```
 
 ### Making Outbound Calls
 
@@ -190,46 +136,34 @@ Available purposes:
 - `feedback_request`
 - `general_inquiry`
 
-### Bulk Calling
+## AWS Deployment
 
-For marketing campaigns or batch notifications:
+For deploying to AWS EC2:
 
-```
-POST /calls/bulk
-{
-    "phone_numbers": ["+1234567890", "+0987654321"],
-    "purpose": "special_promotion",
-    "delay_seconds": 5
-}
-```
+1. Launch an EC2 instance (t2.micro is sufficient for testing)
+2. Install Docker and Docker Compose
+3. Clone this repository
+4. Configure your `.env` file with your Twilio credentials
+5. Run the deployment script:
 
-## Running the Server
-
-```
-python server.py
+```bash
+./aws_deploy.sh
 ```
 
-The server will start on port 8006 by default.
+This will:
+- Set up your environment
+- Configure the server with your public IP
+- Build and start Docker containers
+- Set up Twilio webhooks
 
-## API Endpoints
+## Architecture
 
-- `POST /query`: Process a text query
-- `POST /query-stream`: Stream a text query response
-- `POST /tts`: Convert text to speech
-- `POST /voice-query`: Process a voice query
-- `GET /audio/{filename}`: Get an audio file
-- `POST /tts-stream`: Stream TTS audio
+The system uses a layered architecture:
+1. **FastAPI Server**: Handles HTTP requests and WebSockets
+2. **Twilio Webhook Server**: Handles telephone calls
+3. **QuantAI Agent**: Processes user queries
+4. **Voice Layer**: Manages TTS with ElevenLabs and Coqui XTTS-v2
 
-## WebSocket Endpoints
+## Contributions
 
-- `/ws/tts`: WebSocket for real-time TTS streaming
-- `/ws/conversation`: WebSocket for real-time conversation
-
-## Phone Call Endpoints
-
-- `POST /calls/outbound`: Make an outbound call
-- `POST /calls/bulk`: Make multiple outbound calls
-- `GET /fonoster/status`: Get Fonoster status
-- `POST /fonoster/start-voice-server`: Start the voice server
-- `POST /fonoster/stop-voice-server`: Stop the voice server
-- `POST /fonoster/setup`: Set up Fonoster resources 
+Contributions are welcome! Please feel free to submit a Pull Request. 

@@ -1,4 +1,4 @@
-version: '3.10'
+version: '3.8'
 
 services:
   quantai-restaurant:
@@ -7,10 +7,26 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8006:8006"
-      - "50061:50061"
+      - "5000:5000"
     env_file:
       - .env
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-    restart: always 
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 4G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3" 

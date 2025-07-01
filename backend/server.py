@@ -8,7 +8,7 @@ Endpoints:
 2. Convert responses to speech using Coqui XTTS-v2.
 3. Handle audio file playback.
 4. Stream real-time TTS via WebSockets.
-5. Integrate with Fonoster for telephone calls.
+5. Integrate with Twilio for telephone calls.
 6. Manage outbound calls for reservation confirmations.
 """
 
@@ -37,10 +37,10 @@ import uvloop  # High-performance event loop replacement
 import orjson  # Faster JSON processing
 from concurrent.futures import ThreadPoolExecutor
 
-# Fonoster integration
-from fonoster_voice_app import QuantAIVoiceServer
-from outbound_calls import OutboundCaller
-from fonoster_config import FonosterConfig
+# Twilio integration
+from twilio_voice_app import TwilioVoiceServer
+from twilio_outbound_calls import TwilioOutboundCaller
+from flask import Flask, request, Response
 
 # Set uvloop as the event loop policy
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -143,12 +143,11 @@ class BulkCallRequest(BaseModel):
     purpose: str = "general_inquiry"
     delay_seconds: int = 5
 
-class FonosterStatusResponse(BaseModel):
-    """Model for Fonoster status response."""
+class TwilioStatusResponse(BaseModel):
+    """Model for Twilio status response."""
     status: str
-    voice_server_running: bool
+    twilio_server_running: bool
     phone_numbers: List[Dict[str, Any]] = []
-    voice_apps: List[Dict[str, Any]] = []
     error: Optional[str] = None
 
 class QuantAIRestaurantServer:
@@ -285,22 +284,40 @@ def validate_and_convert_audio(audio_data: bytes) -> Optional[bytes]:
 # Server startup and shutdown events
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan context manager for FastAPI app."""
-    # Startup
-    logger.info("Starting QuantAI Restaurant API Server")
-    cleanup_old_files(TEMP_DIR)
+    """
+    Lifespan context manager for FastAPI.
+    Handles startup and shutdown events.
+    """
+    # Create server instance for global use
+    global server
+    global twilio_flask_app
+    
+    logger.info("Initializing QuantAI Restaurant server...")
     try:
-        logger.info("Initializing server components...")
-        app.state.server = QuantAIRestaurantServer(speaker_wav=DEFAULT_SPEAKER_WAV)
-        logger.info("✓ Server initialized successfully")
+        # Initialize server
+        server = QuantAIRestaurantServer(speaker_wav=DEFAULT_SPEAKER_WAV)
+        logger.info("Server initialized.")
+        
+        # Initialize Twilio Flask app in a separate thread
+        from threading import Thread
+        from twilio_voice_app import app as flask_app
+        twilio_flask_app = flask_app
+        
+        # Start Twilio Flask app in a separate thread
+        twilio_thread = Thread(target=lambda: twilio_flask_app.run(host='0.0.0.0', port=5000))
+        twilio_thread.daemon = True
+        twilio_thread.start()
+        logger.info("Twilio voice server started on port 5000")
+        
+        yield
+        
     except Exception as e:
-        logger.error(f"Failed to initialize server: {e}")
-        raise RuntimeError(f"Server initialization failed: {e}")
-    yield
-    # Shutdown
-    logger.info("Shutting down QuantAI Restaurant API Server")
-    cleanup_old_files(TEMP_DIR)
-    THREAD_POOL.shutdown(wait=False)
+        logger.error(f"Error initializing server: {e}")
+        raise
+    finally:
+        # Clean up on shutdown
+        logger.info("Shutting down server...")
+        # Any cleanup code for the server
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -730,19 +747,15 @@ async def process_text_query_alias(request: TextRequest):
     return await process_text_query(request)
 
 # -----------------------------------------------------------------------------
-# Phone call endpoints with Fonoster
+# Phone call endpoints with Twilio
 # -----------------------------------------------------------------------------
-
-# Global variable to track voice server status
-voice_server_running = False
-voice_server_task = None
 
 @app.post("/calls/outbound", response_model=OutboundCallResponse)
 async def make_outbound_call(request: OutboundCallRequest):
     """Make an outbound call to a customer."""
     try:
         # Create caller
-        caller = OutboundCaller()
+        caller = TwilioOutboundCaller()
         
         # Make the call
         result = await caller.make_call(
@@ -773,157 +786,144 @@ async def make_outbound_call(request: OutboundCallRequest):
 
 @app.post("/calls/bulk", response_model=List[OutboundCallResponse])
 async def make_bulk_calls(request: BulkCallRequest):
-    """Make multiple outbound calls with a delay between them."""
+    """Make multiple outbound calls."""
     try:
         # Create caller
-        caller = OutboundCaller()
+        caller = TwilioOutboundCaller()
         
-        # Make the calls
+        # Make bulk calls
         results = await caller.make_bulk_calls(
             request.phone_numbers,
             request.purpose,
             request.delay_seconds
         )
         
-        # Convert to response format
+        # Convert to response model
         responses = []
         for result in results:
-            if result.get("status") == "initiated":
-                responses.append(OutboundCallResponse(
-                    success=True,
-                    call_id=result.get("call_id"),
-                    status="initiated"
-                ))
-            else:
-                responses.append(OutboundCallResponse(
-                    success=False,
-                    status="failed",
-                    error=result.get("error", "Unknown error")
-                ))
+            success = result.get("status") == "initiated"
+            response = OutboundCallResponse(
+                success=success,
+                call_id=result.get("call_id"),
+                status=result.get("status"),
+                error=result.get("error") if not success else None
+            )
+            responses.append(response)
         
         return responses
     except Exception as e:
         logger.error(f"Error making bulk calls: {e}")
-        # Return error for all numbers
         return [
             OutboundCallResponse(
                 success=False,
                 status="error",
                 error=str(e)
             )
-            for _ in request.phone_numbers
         ]
 
-@app.get("/fonoster/status", response_model=FonosterStatusResponse)
-async def get_fonoster_status():
-    """Get the status of the Fonoster voice system."""
+@app.get("/twilio/status")
+async def get_twilio_status():
+    """Get the status of the Twilio connection."""
     try:
-        # Check if voice server is running
-        global voice_server_running
+        # Check if Twilio credentials are set
+        account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+        auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+        twilio_number = os.getenv("TWILIO_PHONE_NUMBER")
         
-        # Create Fonoster config
-        config = FonosterConfig()
+        if not all([account_sid, auth_token, twilio_number]):
+            return {
+                "status": "not_configured",
+                "error": "Missing Twilio credentials"
+            }
         
-        # Try to login
-        login_success = await config.login()
+        # Check if the Flask app is running
+        twilio_server_running = twilio_flask_app is not None
         
-        if not login_success:
-            return FonosterStatusResponse(
-                status="error",
-                voice_server_running=voice_server_running,
-                error="Failed to authenticate with Fonoster"
+        # Get Twilio phone numbers
+        from twilio.rest import Client
+        client = Client(account_sid, auth_token)
+        phone_numbers = list(client.incoming_phone_numbers.list(limit=10))
+        
+        return {
+            "status": "ok",
+            "twilio_server_running": twilio_server_running,
+            "phone_numbers": [
+                {
+                    "phone_number": number.phone_number,
+                    "friendly_name": number.friendly_name,
+                    "sid": number.sid
+                }
+                for number in phone_numbers
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error checking Twilio status: {e}")
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
+@app.post("/twilio/setup")
+async def setup_twilio():
+    """Set up Twilio webhooks for the server."""
+    try:
+        # Get Twilio credentials
+        account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+        auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+        twilio_number = os.getenv("TWILIO_PHONE_NUMBER")
+        
+        if not all([account_sid, auth_token, twilio_number]):
+            return {
+                "status": "error", 
+                "message": "Missing Twilio credentials. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER environment variables."
+            }
+        
+        # Get server public URL
+        server_url = os.getenv("TWILIO_WEBHOOK_BASE_URL")
+        if not server_url:
+            return {
+                "status": "error",
+                "message": "Missing TWILIO_WEBHOOK_BASE_URL environment variable."
+            }
+        
+        # Set up webhooks
+        from twilio.rest import Client
+        client = Client(account_sid, auth_token)
+        
+        # Update the phone number with webhooks
+        try:
+            # Find the phone number in the account
+            incoming_phone_numbers = client.incoming_phone_numbers.list(phone_number=twilio_number)
+            if not incoming_phone_numbers:
+                return {
+                    "status": "error",
+                    "message": f"Phone number {twilio_number} not found in your Twilio account."
+                }
+            
+            # Update the first matching phone number
+            phone_number = incoming_phone_numbers[0]
+            phone_number.update(
+                voice_url=f"{server_url}/voice",
+                voice_method="POST"
             )
-        
-        # Get phone numbers and voice apps
-        phone_numbers = await config.list_phone_numbers()
-        voice_apps = await config.list_voice_apps()
-        
-        return FonosterStatusResponse(
-            status="ok",
-            voice_server_running=voice_server_running,
-            phone_numbers=phone_numbers,
-            voice_apps=voice_apps
-        )
+            
+            return {
+                "status": "ok",
+                "message": f"Twilio webhooks set up successfully for {twilio_number}",
+                "voice_url": f"{server_url}/voice"
+            }
+        except Exception as e:
+            logger.error(f"Error updating phone number: {e}")
+            return {
+                "status": "error",
+                "message": f"Error updating phone number: {str(e)}"
+            }
     except Exception as e:
-        logger.error(f"Error getting Fonoster status: {e}")
-        return FonosterStatusResponse(
-            status="error",
-            voice_server_running=voice_server_running,
-            error=str(e)
-        )
-
-@app.post("/fonoster/start-voice-server")
-async def start_voice_server():
-    """Start the Fonoster voice server."""
-    global voice_server_running, voice_server_task
-    
-    if voice_server_running:
-        return {"status": "already_running"}
-    
-    try:
-        # Create voice server
-        voice_server = QuantAIVoiceServer()
-        
-        # Start voice server in a background task
-        async def run_voice_server():
-            global voice_server_running
-            try:
-                voice_server_running = True
-                await voice_server.start()
-            except Exception as e:
-                logger.error(f"Voice server error: {e}")
-            finally:
-                voice_server_running = False
-        
-        # Start the task
-        voice_server_task = asyncio.create_task(run_voice_server())
-        
-        return {"status": "started"}
-    except Exception as e:
-        logger.error(f"Error starting voice server: {e}")
-        return {"status": "error", "error": str(e)}
-
-@app.post("/fonoster/stop-voice-server")
-async def stop_voice_server():
-    """Stop the Fonoster voice server."""
-    global voice_server_running, voice_server_task
-    
-    if not voice_server_running:
-        return {"status": "not_running"}
-    
-    try:
-        # Cancel the task
-        if voice_server_task:
-            voice_server_task.cancel()
-            try:
-                await voice_server_task
-            except asyncio.CancelledError:
-                pass
-            voice_server_task = None
-        
-        voice_server_running = False
-        return {"status": "stopped"}
-    except Exception as e:
-        logger.error(f"Error stopping voice server: {e}")
-        return {"status": "error", "error": str(e)}
-
-@app.post("/fonoster/setup")
-async def setup_fonoster():
-    """Set up Fonoster resources."""
-    try:
-        # Import the setup function
-        from fonoster_config import setup_fonoster
-        
-        # Run setup
-        success = await setup_fonoster()
-        
-        if success:
-            return {"status": "ok", "message": "Fonoster setup completed successfully"}
-        else:
-            return {"status": "error", "message": "Fonoster setup failed"}
-    except Exception as e:
-        logger.error(f"Error setting up Fonoster: {e}")
-        return {"status": "error", "error": str(e)}
+        logger.error(f"Error setting up Twilio: {e}")
+        return {
+            "status": "error",
+            "error": str(e)
+        }
 
 if __name__ == "__main__":
     uvicorn.run(

@@ -1,5 +1,5 @@
-# Use Python 3.9 as base image
-FROM python:3.10
+# Use Python 3.10 as base image
+FROM python:3.10.18
 
 # Set working directory
 WORKDIR /app
@@ -8,17 +8,15 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     build-essential \
     ffmpeg \
-    nodejs \
-    npm \
     curl \
+    rustc \
+    cargo \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Fonoster CLI
-RUN npm install -g @fonoster/ctl
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
@@ -26,14 +24,18 @@ COPY . .
 # Create necessary directories
 RUN mkdir -p logs temp_audio
 
-# Expose ports (FastAPI and Fonoster Voice Server)
-EXPOSE 8006 50061
+# Add a non-root user for security
+RUN useradd -m appuser && chown -R appuser /app
+USER appuser
 
-# Create entrypoint script
-RUN echo '#!/bin/bash\n\
-python server.py & \n\
-python fonoster_voice_app.py\n\
-wait' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+# Expose ports (FastAPI and Twilio webhook server)
+EXPOSE 8006 5000
 
-# Set entrypoint
+# Healthcheck (FastAPI health endpoint)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -f http://localhost:8006/health || exit 1
+
+# Entrypoint script for robust startup
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 ENTRYPOINT ["/app/entrypoint.sh"] 

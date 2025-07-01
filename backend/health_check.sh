@@ -1,5 +1,5 @@
 #!/bin/bash
-# Health check script for QuantAI Restaurant
+# Health check script for QuantAI Restaurant with Twilio
 
 LOG_FILE="logs/health_check.log"
 TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
@@ -15,11 +15,11 @@ else
   echo "[$TIMESTAMP] Restart command sent" >> $LOG_FILE
 fi
 
-# Check Fonoster voice server
-if nc -z localhost 50061 2>/dev/null; then
-  echo "[$TIMESTAMP] Voice server is running" >> $LOG_FILE
+# Check Twilio webhook server
+if nc -z localhost 5000 2>/dev/null; then
+  echo "[$TIMESTAMP] Twilio webhook server is running" >> $LOG_FILE
 else
-  echo "[$TIMESTAMP] Voice server is down, restarting..." >> $LOG_FILE
+  echo "[$TIMESTAMP] Twilio webhook server is down, restarting..." >> $LOG_FILE
   docker-compose restart quantai-restaurant
   echo "[$TIMESTAMP] Restart command sent" >> $LOG_FILE
 fi
