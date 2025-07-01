@@ -1,0 +1,42 @@
+# Core dependencies
+fastapi>=0.104.0
+uvicorn>=0.23.2
+python-multipart>=0.0.6
+pydantic>=2.4.2
+websockets>=11.0.3
+
+# Audio processing
+SpeechRecognition>=3.10.0
+pydub>=0.25.1
+numpy>=1.24.0
+
+# TTS engines
+# Coqui TTS - comment out if not using
+TTS>=0.21.1
+torch>=2.0.0
+
+# ElevenLabs - comment out if not using
+elevenlabs>=0.2.26
+
+# Groq API client
+groq>=0.4.0
+
+# Fonoster SDK for phone integration
+fonoster-sdk>=0.3.19
+fonoster-voice>=0.3.19
+
+# Utilities
+python-dotenv>=1.0.0
+colorama>=0.4.6
+tqdm>=4.66.1
+cachetools>=5.3.2
+deep-translator>=1.11.4
+
+# Performance optimization
+uvloop>=0.17.0
+httpx>=0.24.1
+orjson>=3.9.0
+
+# For testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.1 

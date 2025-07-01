@@ -1,0 +1,8 @@
+2025-06-30 22:57:31,967 - __main__ - INFO - Loaded quantai_restaurant_analytics.csv
+2025-06-30 22:57:31,977 - __main__ - INFO - Loaded quantai_restaurant_customers.csv
+2025-06-30 22:57:31,981 - __main__ - INFO - Loaded quantai_restaurant_reservations.csv
+2025-06-30 22:57:32,004 - __main__ - INFO - Loaded quantai_restaurant_orders.csv
+2025-06-30 22:57:32,034 - __main__ - INFO - Loaded quantai_restaurant_financial.csv
+2025-06-30 22:57:32,037 - __main__ - INFO - Loaded quantai_restaurant_menu.csv
+2025-06-30 22:57:32,041 - __main__ - INFO - Loaded quantai_restaurant_inventory.csv
+2025-06-30 22:57:32,043 - __main__ - INFO - Loaded quantai_restaurant_staff_schedule.csv
